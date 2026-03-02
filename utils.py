@@ -1,3 +1,5 @@
+import os
+from collections import defaultdict
 import torch
 import random
 import numpy as np
@@ -124,6 +126,107 @@ def eva(y_true, y_pred, show_details=True):
 
     return nmi, ari
 
+def _load_facebook_data(dataset_dir, ego_id):
+    """Load a graph from raw facebook files in the dataset directory.
+
+    Parameters
+    ----------
+    dataset_dir : str
+        Path to the dataset directory (e.g., 'dataset/facebook').
+    ego_id : str
+        The ego node ID (e.g., '0').
+
+    Returns
+    -------
+    feat, label, adj
+    """
+    feat_path = os.path.join(dataset_dir, f"{ego_id}.feat")
+    egofeat_path = os.path.join(dataset_dir, f"{ego_id}.egofeat")
+    edge_path = os.path.join(dataset_dir, f"{ego_id}.edges")
+    circle_path = os.path.join(dataset_dir, f"{ego_id}.circles")
+
+    # Map external node ID to internal index
+    id_map = {}
+    all_features = []
+
+    # 1. Load Ego Node Feature
+    ego_val = int(ego_id)
+    if os.path.exists(egofeat_path):
+        with open(egofeat_path, 'r') as f:
+            content = f.read().strip().split()
+            ego_features = np.array([float(x) for x in content], dtype=np.float32)
+            
+            id_map[ego_val] = 0
+            all_features.append(ego_features)
+
+    # 2. Load Alter Nodes Features
+    if os.path.exists(feat_path):
+        with open(feat_path, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                node_id = int(parts[0])
+                feats = np.array([float(x) for x in parts[1:]], dtype=np.float32)
+                
+                if node_id not in id_map:
+                    id_map[node_id] = len(id_map)
+                    all_features.append(feats)
+    
+    # If no features found, create identity or handle gracefully? 
+    # Usually SNAP data has features.
+    if len(all_features) == 0:
+        # Fallback if no features - just identity for ego
+        # But this likely means paths are wrong
+        print(f"Warning: No features found for ego {ego_id} in {dataset_dir}")
+        X = np.eye(1, dtype=np.float32)
+    else:
+        X = np.array(all_features)
+    
+    num_nodes = len(id_map)
+
+    # 3. Edges
+    edges = []
+    if os.path.exists(edge_path):
+        with open(edge_path, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    u, v = int(parts[0]), int(parts[1])
+                    if u in id_map and v in id_map:
+                        edges.append((id_map[u], id_map[v]))
+                        edges.append((id_map[v], id_map[u]))
+
+    # Add edges from Ego to everyone else
+    if ego_val in id_map:
+        ego_idx = id_map[ego_val]
+        for node_id, idx in id_map.items():
+            if idx != ego_idx:
+                edges.append((ego_idx, idx))
+                edges.append((idx, ego_idx))
+
+    if len(edges) > 0:
+        edges = np.array(edges)
+        row = edges[:, 0]
+        col = edges[:, 1]
+        data = np.ones(len(edges))
+        A = sp.csr_matrix((data, (row, col)), shape=(num_nodes, num_nodes))
+    else:
+        A = sp.eye(num_nodes, format='csr')
+
+    # 4. Labels (Circles)
+    # Default label -1 or 0
+    labels = np.zeros(num_nodes, dtype=np.int32)
+    
+    if os.path.exists(circle_path):
+        with open(circle_path, 'r') as f:
+            for i, line in enumerate(f):
+                parts = line.strip().split()
+                # format: circle<id> node1 node2 ...
+                for node_str in parts[1:]:
+                    node_id = int(node_str)
+                    if node_id in id_map:
+                        labels[id_map[node_id]] = i
+
+    return X, labels, A
 
 def load_graph_data(dataset_name, show_details=False):
     """
@@ -139,6 +242,14 @@ def load_graph_data(dataset_name, show_details=False):
     - category distribution
     :return: the features, labels and adj
     """
+    if dataset_name.startswith("facebook"):
+        folder = "dataset/facebook"
+        if "_" in dataset_name:
+            ego_id = dataset_name.split("_")[1]
+        else:
+            ego_id = "1912"
+        return _load_facebook_data(folder, ego_id)
+    
     load_path = "dataset/" + dataset_name + "/" + dataset_name
     feat = np.load(load_path+"_feat.npy", allow_pickle=True)
     label = np.load(load_path+"_label.npy", allow_pickle=True)

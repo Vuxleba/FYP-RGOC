@@ -34,7 +34,8 @@ args = parser.parse_args()
 
 device = "cuda:0"
 file_name = "result.csv"
-for args.dataset in ["bat", "eat", "cora", "citeseer"]:
+# for args.dataset in ["bat", "eat", "cora", "citeseer"]:
+for args.dataset in ["facebook"]:
     # "amap",
     file = open(file_name, "a+")
     print(args.dataset, file=file)
@@ -48,6 +49,15 @@ for args.dataset in ["bat", "eat", "cora", "citeseer"]:
         args.dims = [1500]
         args.epsilon = 0.5
         args.replay_buffer_size = 40
+
+    elif args.dataset == 'facebook':
+        args.cluster_num = 8
+        args.gnnlayers = 2
+        args.lr = 1e-3
+        args.n_input = -1
+        args.dims = [512]
+        args.epsilon = 0.5
+        args.replay_buffer_size = 50
 
     elif args.dataset == 'citeseer':
         args.cluster_num = 6
@@ -89,7 +99,7 @@ for args.dataset in ["bat", "eat", "cora", "citeseer"]:
     ari_list = []
     k_list = []
     # init
-    for seed in range(10):
+    for seed in range(5):
         setup_seed(seed)
         X, y, A = load_graph_data(args.dataset, show_details=False)
         features = X
@@ -230,13 +240,13 @@ for args.dataset in ["bat", "eat", "cora", "citeseer"]:
                     np.random.shuffle(idx)
                     loss_Q = 0
                     for i in idx:
-                        s = replay_buffer[i][0][0]
-                        s_c = replay_buffer[i][0][1]
-                        a = replay_buffer[i][1]
-                        s_new = replay_buffer[i][2][0]
-                        s_new_c = replay_buffer[i][2][1]
-                        r = replay_buffer[i][3]
-                        Q_value = Q_net(s, s_c).mean(0)[a]
+                        s = replay_buffer[i][0][0] # state
+                        s_c = replay_buffer[i][0][1] # cluster state
+                        a = replay_buffer[i][1] # action
+                        s_new = replay_buffer[i][2][0] # next state
+                        s_new_c = replay_buffer[i][2][1] # next cluster state
+                        r = replay_buffer[i][3] # reward
+                        Q_value = Q_net(s, s_c).mean(0)[a] 
                         y = r + 0.1 * Q_net(s_new, s_new_c).mean(0).max()
                         loss_Q += (y - Q_value) ** 2
                     loss_Q /= len(idx)
