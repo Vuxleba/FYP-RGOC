@@ -6,7 +6,7 @@ from tqdm import tqdm
 from torch import optim
 import torch.nn.functional as F
 from torch_scatter import scatter
-from model import my_model, my_Q_net
+from model import my_model, my_Q_net, Dueling_Q_net
 from sklearn.decomposition import PCA
 
 warnings.filterwarnings("ignore")
@@ -55,7 +55,7 @@ for args.dataset in ["facebook"]:
         args.gnnlayers = 2
         args.lr = 1e-3
         args.n_input = -1
-        args.dims = [512]
+        args.dims = [1500]
         args.epsilon = 0.5
         args.replay_buffer_size = 50
 
@@ -127,7 +127,7 @@ for args.dataset in ["facebook"]:
             np.save(path, sm_fea_s, allow_pickle=True)
 
         # X
-        sm_fea_s = torch.FloatTensor(sm_fea_s)
+        sm_fea_s = torch.FloatTensor(sm_fea_s) # shape = [n, d]
         adj_1st = (adj + sp.eye(adj.shape[0])).toarray()
 
         # test
@@ -144,7 +144,8 @@ for args.dataset in ["facebook"]:
             model = my_model([sm_fea_s.shape[1]] + args.dims, act="sigmoid")
         else:
             model = my_model([sm_fea_s.shape[1]] + args.dims)
-        Q_net = my_Q_net(args.dims + [256, 9]).to(device)
+        # Q_net = my_Q_net(args.dims + [256, 9]).to(device)
+        Q_net = Dueling_Q_net(args.dims + [256, 9]).to(device) # [512, 256, 9]
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
         optimizer_Q = optim.Adam(Q_net.parameters(), lr=args.Q_lr)
 
@@ -167,7 +168,7 @@ for args.dataset in ["facebook"]:
             model.train()
             Q_net.eval()
             optimizer.zero_grad()
-            z1, z2 = model(inx)
+            z1, z2 = model(inx) # z1.shape = [n, 512], z2.shape = [n, 512] for facebook
 
             z1_z2 = torch.cat([z1, z2], dim=0)
             S = z1_z2 @ z1_z2.T
