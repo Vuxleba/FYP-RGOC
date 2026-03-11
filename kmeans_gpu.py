@@ -223,4 +223,3 @@ def pairwise_cosine(data1, data2, device=torch.device('cuda')):
     # return N*N matrix for pairwise distance
     cosine_dis = 1 - cosine.sum(dim=-1).squeeze()
     return cosine_dis
-

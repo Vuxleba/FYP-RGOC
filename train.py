@@ -55,7 +55,7 @@ for args.dataset in ["facebook"]:
         args.gnnlayers = 2
         args.lr = 1e-3
         args.n_input = -1
-        args.dims = [1500]
+        args.dims = [512]
         args.epsilon = 0.5
         args.replay_buffer_size = 50
 
@@ -99,7 +99,7 @@ for args.dataset in ["facebook"]:
     ari_list = []
     k_list = []
     # init
-    for seed in range(5):
+    for seed in range(10):
         setup_seed(seed)
         X, y, A = load_graph_data(args.dataset, show_details=False)
         features = X
@@ -133,7 +133,7 @@ for args.dataset in ["facebook"]:
         # test
         # best_nmi = 0
         # best_ari = 0
-        args.cluster_num = np.random.randint(0, 9) + 2
+        args.cluster_num = np.random.randint(0, 16) + 2
 
         # init clustering
         _, _, predict_labels, _, _ = clustering(sm_fea_s.detach(), true_labels, args.cluster_num, device=device)
@@ -144,8 +144,8 @@ for args.dataset in ["facebook"]:
             model = my_model([sm_fea_s.shape[1]] + args.dims, act="sigmoid")
         else:
             model = my_model([sm_fea_s.shape[1]] + args.dims)
-        # Q_net = my_Q_net(args.dims + [256, 9]).to(device)
-        Q_net = Dueling_Q_net(args.dims + [256, 9]).to(device) # [512, 256, 9]
+        Q_net = my_Q_net(args.dims + [256, 16]).to(device)
+        # Q_net = Dueling_Q_net(args.dims + [256, 16]).to(device) # [512, 256, 9]
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
         optimizer_Q = optim.Adam(Q_net.parameters(), lr=args.Q_lr)
 
@@ -186,8 +186,15 @@ for args.dataset in ["facebook"]:
             loss = infoNEC
             state = (z1 + z2) / 2
 
-            cluster_state = scatter(state, torch.tensor(predict_labels).to(device), dim=0, reduce="mean")
-
+            # cluster_state = scatter(state, torch.tensor(predict_labels).to(device), dim=0, reduce="mean") #get the cluster centroids by averaging the node states in each cluster (based on nodes labels "predict_labels "), shape = [k, 512] for facebook
+            """
+            The change happens the line above
+            """
+            # Matrix multiplication for overlapping cluster states
+            assignment_matrix = predict_labels.float().to(device)
+            cluster_sums = torch.matmul(assignment_matrix.T, state)
+            cluster_sizes = assignment_matrix.sum(dim=0).unsqueeze(1)
+            cluster_state = cluster_sums / (cluster_sizes + 1e-8)
             rand = False
 
             # do action by random choose
@@ -202,11 +209,25 @@ for args.dataset in ["facebook"]:
             nmi, ari, predict_labels, centers, dis = clustering(state.detach(), true_labels, args.cluster_num, device=device)
             dis = (state.unsqueeze(1) - centers.unsqueeze(0)).pow(2).sum(-1) + 1
 
-            q = dis / (dis.sum(-1).reshape(-1, 1))
-            p = q.pow(2) / q.sum(0).reshape(1, -1)
-            p = p / p.sum(-1).reshape(-1, 1)
-            pq_loss = F.kl_div(q.log(), p)
-            loss += 10 * pq_loss
+            # q = dis / (dis.sum(-1).reshape(-1, 1))
+            # p = q.pow(2) / q.sum(0).reshape(1, -1)
+            # p = p / p.sum(-1).reshape(-1, 1)
+            # pq_loss = F.kl_div(q.log(), p)
+            # loss += 10 * pq_loss
+
+            # ==========================================
+            # [OVERLAP-FRIENDLY GNN LOSS]
+            # ==========================================
+            # 1. Calculate the raw edge scores (logits) WITHOUT using torch.sigmoid()
+            # adj_logits = torch.matmul(state, state.T)
+            
+            # # 2. Use BCE_with_logits, which safely applies sigmoid under the hood
+            # bce_loss = F.binary_cross_entropy_with_logits(adj_logits.view(-1), target.view(-1))
+            
+            # # 3. Add to the base contrastive loss
+            # loss += 10 * bce_loss
+            # ========================
+            # ==========================================
 
             if nmi >= best_nmi and rand == False:
                 best_nmi = nmi
@@ -221,10 +242,46 @@ for args.dataset in ["facebook"]:
             z1, z2 = model(inx)
             next_state = (z1 + z2) / 2
 
-            next_cluster_state = scatter(next_state, torch.tensor(predict_labels).to(device), dim=0, reduce="mean")
+            # next_cluster_state = scatter(next_state, torch.tensor(predict_labels).to(device), dim=0, reduce="mean")
+            assignment_matrix = predict_labels.float().to(device)
+            next_cluster_sums = torch.matmul(assignment_matrix.T, next_state)
+            next_cluster_sizes = assignment_matrix.sum(dim=0).unsqueeze(1)
+            next_cluster_state = next_cluster_sums / (next_cluster_sizes + 1e-8)
 
             center_dis = (centers.unsqueeze(1) - centers.unsqueeze(0)).pow(2).sum(-1).mean()
-            reward = center_dis.detach() - torch.min(dis, dim=1).values.mean().detach()
+            # reward = center_dis.detach() - torch.min(dis, dim=1).values.mean().detach()
+
+            # ==========================================
+            # [CAN / OVERLAPPING GRAPH REWARD]
+            # ==========================================
+            # predict_labels is now your [N, K] binary affiliation matrix from CAN
+            F_binary = torch.tensor(predict_labels).float().to(device)
+            
+            # 1. Co-assignment matrix: Do nodes share AT LEAST one community?
+            co_assign_matrix = torch.matmul(F_binary, F_binary.T)
+            shared_cluster_mask = (co_assign_matrix > 0).float()
+            
+            # 2. Prepare Graph Topology (Use A_label from line 133)
+            # Remove self-loops to prevent artificial inflation of scores
+            adj_no_loops = A_label - torch.diag_embed(torch.diag(A_label))
+            
+            # 3. Calculate intersections with ground-truth topology
+            # True Positives: An edge exists in Facebook, AND CAN put them in a shared circle
+            true_positives = adj_no_loops * shared_cluster_mask
+            
+            # False Positives: No edge exists, but CAN put them in the same circle anyway
+            false_positives = (1 - adj_no_loops) * shared_cluster_mask - torch.eye(A_label.shape[0]).to(device)
+            
+            # 4. Calculate Modularity Rates
+            edge_coverage = true_positives.sum() / (adj_no_loops.sum() + 1e-8)
+            false_merge_penalty = false_positives.sum() / ((1 - adj_no_loops).sum() + 1e-8)
+            
+            # 5. Center Separation (Optional, but keeps CAN's latent centers from collapsing together)
+            center_separation = (centers.unsqueeze(1) - centers.unsqueeze(0)).pow(2).sum(-1).mean()
+            
+            # 6. Final Scalar Reward for the Q-Network
+            reward = (edge_coverage - false_merge_penalty + 0.1 * center_separation).detach()
+            # ==========================================
 
             replay_buffer.append([[state.detach(), cluster_state.detach()], action,
                                   [next_state.detach(), next_cluster_state.detach()], reward])

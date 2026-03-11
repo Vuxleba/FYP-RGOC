@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import torch.optim as optim
 
 class my_model(nn.Module):
     def __init__(self, dims, act="ident"): # dims.shape = [d, 512]
@@ -93,3 +93,64 @@ class Dueling_Q_net(nn.Module):
         qvals = values + (advantages - advantages.mean(dim=1, keepdim=True))
         
         return qvals
+    
+class CAN(nn.Module):
+    def __init__(self, num_nodes, num_features, num_clusters, device=torch.device('cuda')):
+        super(CAN, self).__init__()
+        self.device = device
+        
+        # Initialize F (Node Affiliations) and C (Cluster Centers)
+        # F shape: [N, K] | C shape: [K, D]
+        self.F_mat = nn.Parameter(torch.rand((num_nodes, num_clusters), device=device))
+        self.C_mat = nn.Parameter(torch.rand((num_clusters, num_features), device=device))
+
+    def forward(self):
+        # Reconstruct X using affiliations and centers: X ~ Relu(F) @ Relu(C)
+        X_hat = torch.matmul(torch.relu(self.F_mat), torch.relu(self.C_mat))
+        return X_hat
+
+    def fit(self, X, max_iter=100, lr=0.05):
+        # Shift latent space to be non-negative if necessary
+        X_min = X.min()
+        if X_min < 0:
+            X_pos = X - X_min
+        else:
+            X_pos = X
+        
+        optimizer = optim.Adam(self.parameters(), lr=lr)
+
+        # Optimization loop
+        for i in range(max_iter):
+            optimizer.zero_grad()
+            
+            X_hat = self.forward()
+            
+            # Loss: Reconstruction Error + Sparsity Constraint on Affiliations
+            loss = F.mse_loss(X_hat, X_pos) + 0.01 * torch.relu(self.F_mat).mean()
+            
+            loss.backward()
+            optimizer.step()
+        
+        # Return shift value for post-processing
+        return X_min
+    
+    def predict(self, X, X_min, threshold=0.5):
+        # Get final affiliations
+        F_final = torch.relu(self.F_mat).detach()
+        C_final = torch.relu(self.C_mat).detach()
+
+        # Normalize so strongest affiliation is 1.0
+        F_max = F_final.max(dim=1, keepdim=True).values + 1e-8
+        F_norm = F_final / F_max
+
+        # Binary labeling
+        binary_labels = (F_norm > threshold).float()
+
+        # Restore centers to original scale for distance calculation
+        if X_min < 0:
+            C_final = C_final + X_min
+        
+        # Calculate distances (for RL reward)
+        dis = torch.cdist(X, C_final, p=2).pow(2)
+
+        return binary_labels.cpu(), C_final, dis

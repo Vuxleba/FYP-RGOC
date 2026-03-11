@@ -6,7 +6,8 @@ import numpy as np
 import scipy.sparse as sp
 from sklearn import metrics
 from munkres import Munkres
-from kmeans_gpu import kmeans
+from kmeans_gpu import kmeans                              
+from model import CAN         
 from sklearn.metrics import adjusted_rand_score as ari_score
 from sklearn.metrics.cluster import normalized_mutual_info_score as nmi_score
 
@@ -247,7 +248,7 @@ def load_graph_data(dataset_name, show_details=False):
         if "_" in dataset_name:
             ego_id = dataset_name.split("_")[1]
         else:
-            ego_id = "1912"
+            ego_id = "3980"
         return _load_facebook_data(folder, ego_id)
     
     load_path = "dataset/" + dataset_name + "/" + dataset_name
@@ -320,11 +321,38 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 
-def clustering(feature, true_labels, cluster_num, device):
-    predict_labels, centers, dis = kmeans(X=feature, num_clusters=cluster_num, distance="euclidean", device=device)
+# def clustering(feature, true_labels, cluster_num, device):
+#     predict_labels, centers, dis = kmeans(X=feature, num_clusters=cluster_num, distance="euclidean", device=device)
 
-    nmi, ari = eva(true_labels, predict_labels.numpy(), show_details=False)
-    return 100 * nmi, 100 * ari, predict_labels.numpy(), centers, dis
+#     nmi, ari = eva(true_labels, predict_labels.numpy(), show_details=False)
+#     return 100 * nmi, 100 * ari, predict_labels.numpy(), centers, dis
+
+def clustering(feature, true_labels, cluster_num, device):
+    # Ensure feature is on the correct device
+    feature = feature.to(device)
+
+    # 1. Instantiate the CAN model for the current batch
+    model = CAN(
+        num_nodes=feature.shape[0], 
+        num_features=feature.shape[1], 
+        num_clusters=cluster_num, 
+        device=device
+    ).to(device)
+
+    # 2. Train (fit) the model on the current embeddings
+    # We pass the feature to fit, which returns the shift value used
+    X_min = model.fit(feature)
+
+    # 3. Get predictions
+    predict_labels_matrix, centers, dis = model.predict(feature, X_min, threshold=0.5)
+
+    # 4. Evaluation for logging (Collapse overlapping labels to single dominant label)
+    # We use argmax to force a single label for NMI/ARI calculation
+    dominant_labels = torch.argmax(predict_labels_matrix, dim=1).numpy()
+    nmi, ari = eva(true_labels, dominant_labels, show_details=False)
+    
+    # 5. Return the full overlapping matrix for the RL agent
+    return 100 * nmi, 100 * ari, predict_labels_matrix, centers, dis
 
 
 def diffusion_adj(adj, mode="ppr", transport_rate=0.2):
