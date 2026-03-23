@@ -31,9 +31,9 @@ class my_Model(nn.Module):
 class my_Q_net(nn.Module):
     def __init__(self, dims):
         super(my_Q_net, self).__init__()
-        self.lin_z = nn.Linear(dims[0], dims[1])
-        self.lin_c = nn.Linear(dims[0], dims[1])
-        self.lin_o = nn.Linear(dims[1], dims[2])
+        self.lin_z = nn.Linear(dims[0], dims[1]) # [dims[0], 256]
+        self.lin_c = nn.Linear(dims[0], dims[1]) # [dims[0], 256]
+        self.lin_o = nn.Linear(dims[1], dims[2]) # [256, 19]
         self.reset_parameters()
         self.act = nn.ReLU()
 
@@ -41,9 +41,25 @@ class my_Q_net(nn.Module):
         self.lin_z.reset_parameters()
         self.lin_c.reset_parameters()
 
-    def forward(self, x, c):
-        x = self.act(F.normalize(self.lin_z(x), dim=1, p=2))
-        c = self.act(F.normalize(self.lin_c(c), dim=1, p=2))
-        x = F.softmax(self.lin_o(torch.concat([x,c], dim=0)), dim=-1)
-        return x
+    # def forward(self, x, c):
+    #     x = self.act(F.normalize(self.lin_z(x), dim=1, p=2))
+    #     c = self.act(F.normalize(self.lin_c(c), dim=1, p=2))
+    #     x = F.softmax(self.lin_o(torch.concat([x,c], dim=0)), dim=-1)
+    #     return x
+
+    def forward(self, x, cluster):
+        # Global average pooling
+        # x_shape: [N, D] -> [1, D]
+        x_pooled = x.mean(dim=0, keepdim=True) 
+        # cluster_shape: [K, D] -> [1, D]
+        cluster_pooled = cluster.mean(dim=0, keepdim=True)
+        
+        x_emb = self.act(F.normalize(self.lin_z(x_pooled), dim=1, p=2)) # [1, dims[1]]
+        c_emb = self.act(F.normalize(self.lin_c(cluster_pooled), dim=1, p=2)) # [1, dims[1]]
+        
+        # Concat along features
+        features = x_emb + c_emb # [1, dims[1]]
+        q_values = self.lin_o(features)
+        
+        return q_values.squeeze()
          

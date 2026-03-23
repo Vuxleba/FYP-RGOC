@@ -2,12 +2,13 @@ import os
 from collections import defaultdict
 import torch
 import random
+import math
 import numpy as np
 import scipy.sparse as sp
 from sklearn import metrics
 from munkres import Munkres
 from kmeans_gpu import kmeans                              
-from model import CAN         
+import skfuzzy as fuzz
 from sklearn.metrics import adjusted_rand_score as ari_score
 from sklearn.metrics.cluster import normalized_mutual_info_score as nmi_score
 
@@ -112,55 +113,246 @@ def cluster_acc(y_true, y_pred):
     return acc, f1_macro
 
 
-def eva(y_true, y_pred, show_details=True):
-    """
-    evaluate the clustering performance
-    Args:
-        y_true: the ground truth
-        y_pred: the predicted label
-        show_details: if print the details
-    Returns: None
-    """
-    nmi = nmi_score(y_true, y_pred, average_method='arithmetic')
-    ari = ari_score(y_true, y_pred)
-    # ss = silhouette_score(y_true.reshape(-1, 1), y_pred.reshape(-1, 1))
+# def eva(y_true, y_pred, show_details=True):
+#     """
+#     evaluate the clustering performance
+#     Args:
+#         y_true: the ground truth
+#         y_pred: the predicted label
+#         show_details: if print the details
+#     Returns: None
+#     """
+#     nmi = nmi_score(y_true, y_pred, average_method='arithmetic')
+#     ari = ari_score(y_true, y_pred)
 
-    return nmi, ari
+#     return nmi, ari
+
+def eva(C_star, C_hat, num_nodes):
+    """
+    Calculates ONMI, Average F1 Score, and Pairwise Accuracy 
+    for overlapping communities.
+    """
+    # ==========================================
+    # Helper Functions
+    # ==========================================
+    def entropy(p_list):
+        return -sum([p * math.log2(p) for p in p_list if p > 0])
+
+    def calc_conditional_entropy(c1, c2, N):
+        intersect = len(c1.intersection(c2))
+        c1_only = len(c1) - intersect
+        c2_only = len(c2) - intersect
+        neither = N - (intersect + c1_only + c2_only)
+        
+        p_11 = intersect / N
+        p_10 = c1_only / N
+        p_01 = c2_only / N
+        p_00 = neither / N
+        
+        p_x1 = len(c1) / N
+        p_x0 = 1.0 - p_x1
+        p_y1 = len(c2) / N
+        p_y0 = 1.0 - p_y1
+        
+        H_X = entropy([p_x0, p_x1])
+        H_Y = entropy([p_y0, p_y1])
+        H_XY = entropy([p_00, p_01, p_10, p_11])
+        
+        H_X_given_Y = H_XY - H_Y
+        return H_X, H_Y, H_X_given_Y
+
+    def calc_f1(set_a, set_b):
+        """Helper to calculate F1 score between two sets of nodes."""
+        if not set_a or not set_b:
+            return 0.0
+        intersect = len(set_a.intersection(set_b))
+        return (2.0 * intersect) / (len(set_a) + len(set_b))
+
+    # Base check
+    if not C_star or not C_hat:
+        return 0.0, 0.0, 0.0
+
+    # ==========================================
+    # 1. ONMI Calculation
+    # ==========================================
+    H_X_given_Y_norm = []
+    for c_x in C_star:
+        H_X, _, _ = calc_conditional_entropy(c_x, set(), num_nodes)
+        if H_X == 0:
+            continue
+            
+        min_H_X_given_Y = float('inf')
+        for c_y in C_hat:
+            _, _, H_X_given_Y = calc_conditional_entropy(c_x, c_y, num_nodes)
+            min_H_X_given_Y = min(min_H_X_given_Y, H_X_given_Y)
+            
+        H_X_given_Y_norm.append(min(1.0, min_H_X_given_Y / H_X))
+
+    H_Y_given_X_norm = []
+    for c_y in C_hat:
+        H_Y, _, _ = calc_conditional_entropy(c_y, set(), num_nodes)
+        if H_Y == 0:
+            continue
+            
+        min_H_Y_given_X = float('inf')
+        for c_x in C_star:
+            _, _, H_Y_given_X = calc_conditional_entropy(c_y, c_x, num_nodes)
+            min_H_Y_given_X = min(min_H_Y_given_X, H_Y_given_X)
+            
+        H_Y_given_X_norm.append(min(1.0, min_H_Y_given_X / H_Y))
+
+    avg_H_X_given_Y = np.mean(H_X_given_Y_norm) if H_X_given_Y_norm else 1.0
+    avg_H_Y_given_X = np.mean(H_Y_given_X_norm) if H_Y_given_X_norm else 1.0
+    
+    onmi = max(0.0, 1.0 - 0.5 * (avg_H_X_given_Y + avg_H_Y_given_X))
+
+    # ==========================================
+    # 2. Average F1 Score Calculation
+    # ==========================================
+    f1_star_to_hat = []
+    for c_x in C_star:
+        best_f1 = max([calc_f1(c_x, c_y) for c_y in C_hat])
+        f1_star_to_hat.append(best_f1)
+        
+    f1_hat_to_star = []
+    for c_y in C_hat:
+        best_f1 = max([calc_f1(c_y, c_x) for c_x in C_star])
+        f1_hat_to_star.append(best_f1)
+        
+    avg_f1 = 0.5 * (np.mean(f1_star_to_hat) + np.mean(f1_hat_to_star))
+
+    # ==========================================
+    # 3. Pairwise Accuracy Calculation
+    # ==========================================
+    shared_true = np.zeros((num_nodes, num_nodes), dtype=np.int32)
+    shared_pred = np.zeros((num_nodes, num_nodes), dtype=np.int32)
+    
+    for c in C_star:
+        nodes = list(c)
+        for i in range(len(nodes)):
+            for j in range(i, len(nodes)): 
+                shared_true[nodes[i], nodes[j]] += 1
+                if i != j: shared_true[nodes[j], nodes[i]] += 1
+                
+    for c in C_hat:
+        nodes = list(c)
+        for i in range(len(nodes)):
+            for j in range(i, len(nodes)):
+                shared_pred[nodes[i], nodes[j]] += 1
+                if i != j: shared_pred[nodes[j], nodes[i]] += 1
+                
+    # Fraction of pairs where the number of shared communities matches exactly
+    accuracy = np.mean(shared_true == shared_pred)
+
+    return onmi, avg_f1, accuracy
+
+# def eva(C_star, C_hat, num_nodes):
+#     """
+#     Evaluates detected communities against ground truth using BigClam metrics.
+    
+#     Parameters
+#     ----------
+#     C_star : list of set of int
+#         Ground truth communities (each set contains node indices).
+#     C_hat : list of set of int
+#         Detected communities (each set contains node indices).
+#     num_nodes : int
+#         Total number of nodes in the graph.
+        
+#     Returns
+#     -------
+#     dict
+#         Dictionary containing Average F1, Omega Index, NMI, and Number Accuracy.
+#     """
+    
+#     def calc_f1(set_a, set_b):
+#         """Helper to calculate F1 score between two sets of nodes."""
+#         if not set_a or not set_b:
+#             return 0.0
+#         intersect = len(set_a.intersection(set_b))
+#         return (2.0 * intersect) / (len(set_a) + len(set_b))
+
+#     # 1. Average F1 Score
+#     # Defined as the average of the F1-score of the best-matching ground-truth 
+#     # community to each detected community, and vice versa.
+#     f1_star_to_hat = []
+#     for c_i in C_star:
+#         best_f1 = max([calc_f1(c_i, c_j) for c_j in C_hat]) if C_hat else 0.0
+#         f1_star_to_hat.append(best_f1)
+        
+#     f1_hat_to_star = []
+#     for c_j in C_hat:
+#         best_f1 = max([calc_f1(c_j, c_i) for c_i in C_star]) if C_star else 0.0
+#         f1_hat_to_star.append(best_f1)
+        
+#     avg_f1_star = np.mean(f1_star_to_hat) if f1_star_to_hat else 0.0
+#     avg_f1_hat = np.mean(f1_hat_to_star) if f1_hat_to_star else 0.0
+#     avg_f1 = 0.5 * (avg_f1_star + avg_f1_hat) # [cite: 404]
+
+#     # 2. Omega Index
+#     # Accuracy on estimating the number of communities that each pair of nodes shares.
+#     shared_true = np.zeros((num_nodes, num_nodes), dtype=np.int32)
+#     shared_pred = np.zeros((num_nodes, num_nodes), dtype=np.int32)
+    
+#     for c in C_star:
+#         nodes = list(c)
+#         for i in range(len(nodes)):
+#             for j in range(i, len(nodes)): 
+#                 shared_true[nodes[i], nodes[j]] += 1
+#                 if i != j: shared_true[nodes[j], nodes[i]] += 1
+                
+#     for c in C_hat:
+#         nodes = list(c)
+#         for i in range(len(nodes)):
+#             for j in range(i, len(nodes)):
+#                 shared_pred[nodes[i], nodes[j]] += 1
+#                 if i != j: shared_pred[nodes[j], nodes[i]] += 1
+                
+#     # Fraction of pairs (u, v) where the number of shared communities is exactly the same
+#     omega_index = np.mean(shared_true == shared_pred) # [cite: 407, 408]
+
+#     # 3. Normalized Mutual Information (NMI)
+#     # For overlapping communities, a common approximation is flattening the binary 
+#     # membership matrices, as standard NMI expects mutually exclusive labels.
+#     Y_true_bin = np.zeros((num_nodes, len(C_star)), dtype=np.int32)
+#     for i, c in enumerate(C_star):
+#         for node in c: Y_true_bin[node, i] = 1
+            
+#     Y_pred_bin = np.zeros((num_nodes, len(C_hat)), dtype=np.int32)
+#     for i, c in enumerate(C_hat):
+#         for node in c: Y_pred_bin[node, i] = 1
+
+#     # Flatten arrays to compute standard NMI on overlapping matrices
+#     nmi_score = nmi_score(Y_true_bin.flatten(), Y_pred_bin.flatten()) # [cite: 410, 411]
+
+#     # 4. Accuracy in the number of communities
+#     # Relative accuracy between the detected and the true number of communities.
+#     num_true = len(C_star)
+#     num_pred = len(C_hat)
+#     if num_true == 0:
+#         num_acc = 0.0
+#     else:
+#         # Penalizes over-prediction and under-prediction relative to ground truth
+#         num_acc = max(0.0, 1.0 - abs(num_true - num_pred) / (2.0 * num_true)) # [cite: 412, 413]
+
+#     return {
+#         "Average_F1": avg_f1,
+#         "Omega_Index": omega_index,
+#         "NMI": nmi_score,
+#         "Num_Communities_Accuracy": num_acc
+#     }
 
 def _load_facebook_data(dataset_dir, ego_id):
-    """Load a graph from raw facebook files in the dataset directory.
-
-    Parameters
-    ----------
-    dataset_dir : str
-        Path to the dataset directory (e.g., 'dataset/facebook').
-    ego_id : str
-        The ego node ID (e.g., '0').
-
-    Returns
-    -------
-    feat, label, adj
-    """
+    """Load a graph from raw facebook files in the dataset directory."""
     feat_path = os.path.join(dataset_dir, f"{ego_id}.feat")
     egofeat_path = os.path.join(dataset_dir, f"{ego_id}.egofeat")
     edge_path = os.path.join(dataset_dir, f"{ego_id}.edges")
     circle_path = os.path.join(dataset_dir, f"{ego_id}.circles")
 
-    # Map external node ID to internal index
     id_map = {}
     all_features = []
 
-    # 1. Load Ego Node Feature
-    ego_val = int(ego_id)
-    if os.path.exists(egofeat_path):
-        with open(egofeat_path, 'r') as f:
-            content = f.read().strip().split()
-            ego_features = np.array([float(x) for x in content], dtype=np.float32)
-            
-            id_map[ego_val] = 0
-            all_features.append(ego_features)
-
-    # 2. Load Alter Nodes Features
+    # 1. Load Alter Nodes Features
     if os.path.exists(feat_path):
         with open(feat_path, 'r') as f:
             for line in f:
@@ -171,63 +363,49 @@ def _load_facebook_data(dataset_dir, ego_id):
                 if node_id not in id_map:
                     id_map[node_id] = len(id_map)
                     all_features.append(feats)
+
+    if not all_features:
+        if os.path.exists(egofeat_path):
+             pass # Add ego features here if desired
+        if not all_features:
+             raise ValueError(f"No feature data found for ego {ego_id}")
     
-    # If no features found, create identity or handle gracefully? 
-    # Usually SNAP data has features.
-    if len(all_features) == 0:
-        # Fallback if no features - just identity for ego
-        # But this likely means paths are wrong
-        print(f"Warning: No features found for ego {ego_id} in {dataset_dir}")
-        X = np.eye(1, dtype=np.float32)
-    else:
-        X = np.array(all_features)
-    
+    X = np.array(all_features)
     num_nodes = len(id_map)
 
-    # 3. Edges
-    edges = []
+    # 2. Build Adjacency Matrix
+    adj_set = set()
     if os.path.exists(edge_path):
         with open(edge_path, 'r') as f:
             for line in f:
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    u, v = int(parts[0]), int(parts[1])
-                    if u in id_map and v in id_map:
-                        edges.append((id_map[u], id_map[v]))
-                        edges.append((id_map[v], id_map[u]))
+                u, v = map(int, line.strip().split())
+                if u in id_map and v in id_map:
+                    u_idx, v_idx = id_map[u], id_map[v]
+                    adj_set.add((u_idx, v_idx))
+                    adj_set.add((v_idx, u_idx))
 
-    # Add edges from Ego to everyone else
-    if ego_val in id_map:
-        ego_idx = id_map[ego_val]
-        for node_id, idx in id_map.items():
-            if idx != ego_idx:
-                edges.append((ego_idx, idx))
-                edges.append((idx, ego_idx))
+    rows, cols = zip(*adj_set) if adj_set else ([], [])
+    data = np.ones(len(rows)) 
+    A = sp.csr_matrix((data, (rows, cols)), shape=(num_nodes, num_nodes))
 
-    if len(edges) > 0:
-        edges = np.array(edges)
-        row = edges[:, 0]
-        col = edges[:, 1]
-        data = np.ones(len(edges))
-        A = sp.csr_matrix((data, (row, col)), shape=(num_nodes, num_nodes))
-    else:
-        A = sp.eye(num_nodes, format='csr')
-
-    # 4. Labels (Circles)
-    # Default label -1 or 0
-    labels = np.zeros(num_nodes, dtype=np.int32)
+    # 3. Labels (Circles) - GROUND TRUTH FORMAT (List of Sets)
+    ground_truth_communities = []
     
     if os.path.exists(circle_path):
         with open(circle_path, 'r') as f:
-            for i, line in enumerate(f):
+            for line in f:
                 parts = line.strip().split()
-                # format: circle<id> node1 node2 ...
+                # Format: circle<id> node1 node2 ...
+                circle_nodes = set()
                 for node_str in parts[1:]:
                     node_id = int(node_str)
                     if node_id in id_map:
-                        labels[id_map[node_id]] = i
+                        circle_nodes.add(id_map[node_id])
+                
+                if circle_nodes:
+                    ground_truth_communities.append(circle_nodes)
 
-    return X, labels, A
+    return X, ground_truth_communities, A
 
 def load_graph_data(dataset_name, show_details=False):
     """
@@ -327,34 +505,89 @@ def setup_seed(seed):
 #     nmi, ari = eva(true_labels, predict_labels.numpy(), show_details=False)
 #     return 100 * nmi, 100 * ari, predict_labels.numpy(), centers, dis
 
-def clustering(feature, true_labels, cluster_num, device):
-    # Ensure feature is on the correct device
-    feature = feature.to(device)
+# def clustering(feature, true_labels, cluster_num, device):
+#     # Ensure feature is on the correct device
+#     feature = feature.to(device)
 
-    # 1. Instantiate the CAN model for the current batch
-    model = CAN(
-        num_nodes=feature.shape[0], 
-        num_features=feature.shape[1], 
-        num_clusters=cluster_num, 
-        device=device
-    ).to(device)
+#     # 1. Instantiate FCM
+#     model = FCM(
+#         num_features=feature.shape[1], 
+#         num_clusters=cluster_num, 
+#         device=device
+#     ).to(device)
 
-    # 2. Train (fit) the model on the current embeddings
-    # We pass the feature to fit, which returns the shift value used
-    X_min = model.fit(feature)
+#     # 2. Fit FCM (Iterative Update)
+#     model.fit(feature)
 
-    # 3. Get predictions
-    predict_labels_matrix, centers, dis = model.predict(feature, X_min, threshold=0.5)
+#     # 3. Get Overlapping Predictions
+#     # threshold=0.25 allows multiple clusters per node if their membership is strong enough
+#     predict_labels_matrix, centers, dis = model.predict(feature, threshold=0.25)
 
-    # 4. Evaluation for logging (Collapse overlapping labels to single dominant label)
-    # We use argmax to force a single label for NMI/ARI calculation
-    dominant_labels = torch.argmax(predict_labels_matrix, dim=1).numpy()
-    nmi, ari = eva(true_labels, dominant_labels, show_details=False)
+#     # 4. Evaluation for logging 
+#     # (Collapsing overlapping labels to single dominant label for NMI/ARI scoring)
+#     dominant_labels = torch.argmax(predict_labels_matrix, dim=1).numpy()
+#     nmi, ari = eva(true_labels, dominant_labels, show_details=False)
     
-    # 5. Return the full overlapping matrix for the RL agent
-    return 100 * nmi, 100 * ari, predict_labels_matrix, centers, dis
+#     # 5. Return the full OVERLAPPING matrix for the RL agent
+#     return 100 * nmi, 100 * ari, predict_labels_matrix, centers, dis
 
+def clustering(feature, true_labels, cluster_num, device):
+    # 1. Prepare data for fuzzy c-means (requires CPU numpy array)
+    # feature shape: (N, D) -> skfuzzy requires (D, N)
+    feature_np = feature.detach().cpu().numpy().T  
+    
+    # 2. Run Fuzzy C-Means
+    cntr, u, _, _, _, _, _ = fuzz.cluster.cmeans(
+        data=feature_np, 
+        c=cluster_num, 
+        m=2.0, 
+        error=0.005, 
+        maxiter=1000, 
+        init=None
+    )
 
+    u = u.T  # Transpose back to (n_samples, n_clusters)
+
+    # 3. Move results back to PyTorch and correct device
+    centers = torch.from_numpy(cntr).float().to(device)
+    predict_labels_soft = torch.from_numpy(u).float().to(device)
+
+    '''    
+    # Convert U to hard labels using argmax for dominant cluster assignment
+    predict_labels_hard = torch.argmax(predict_labels_soft, dim=1)
+
+    # Convert predict_labels_hard into a list of sets format (C_hat)
+    predict_labels_hard_np = predict_labels_hard.cpu().numpy()
+    C_hat = []
+    for c in range(cluster_num):
+        member_nodes = set(np.where(predict_labels_hard_np == c)[0].tolist())
+        C_hat.append(member_nodes)
+    '''
+
+    # 4. Process labels
+    u_max = predict_labels_soft.max(dim=1, keepdim=True).values
+    u_norm = predict_labels_soft / (u_max + 1e-8)
+
+    predict_labels_matrix = (u_norm > 0.5).float()
+    
+    # Convert the (N, K) binary matrix into a list of sets format (C_hat)
+    predict_labels_matrix_np = predict_labels_matrix.cpu().numpy()
+    C_hat = []
+    
+    for c in range(cluster_num):
+        # Find all row indices (nodes) where column 'c' is 1
+        member_nodes = set(np.where(predict_labels_matrix_np[:, c] == 1.0)[0].tolist())
+        C_hat.append(member_nodes)
+        
+    # Calculate NMI using the custom BigClam evaluation function true_labels must be passed in as C_star (list of sets)
+    nmi, f1, acc = eva(true_labels, C_hat, num_nodes=feature.shape[0])
+
+    # 5. Compute distances
+    # Ensure 'feature' is on the same device as 'centers'
+    dis = torch.cdist(feature.to(device), centers).pow(2)
+    
+    return 100 * nmi, 100 * f1, 100 * acc, predict_labels_soft, predict_labels_matrix, centers, dis
+    
 def diffusion_adj(adj, mode="ppr", transport_rate=0.2):
     """
     graph diffusion
