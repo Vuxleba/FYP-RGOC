@@ -1,6 +1,7 @@
 import os
 import argparse
 import warnings
+import random
 from utils import *
 from tqdm import tqdm
 from torch import optim
@@ -8,6 +9,7 @@ import torch.nn.functional as F
 from torch_scatter import scatter
 from model import my_model, my_Q_net
 from sklearn.decomposition import PCA
+from collections import deque
 
 warnings.filterwarnings("ignore")
 parser = argparse.ArgumentParser()
@@ -23,80 +25,34 @@ parser.add_argument('--n_input', type=int, default=1000, help='Number of units i
 parser.add_argument('--dims', type=int, default=[500], help='Number of units in hidden layer 1.')
 parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate.')
 
-# Q net
-parser.add_argument('--Q_epochs', type=int, default=50, help='Number of epochs to train Q.')
+# Q netf
+parser.add_argument('--Q_epochs', type=int, default=10, help='Number of epochs to train Q.')
 parser.add_argument('--epsilon', type=float, default=0.5, help='Greedy rate.')
-parser.add_argument('--replay_buffer_size', type=float, default=50, help='Replay buffer size')
+parser.add_argument('--replay_buffer_size', type=float, default=200, help='Replay buffer size')
 parser.add_argument('--Q_lr', type=float, default=1e-3, help='Initial learning rate.')
-
+parser.add_argument('--gamma', type=float, default=1.0, help='Resolution parameter for Fuzzy Modularity (>1 prefers smaller communities).')
 
 args = parser.parse_args()
 
 device = "cuda:0"
 file_name = "result.csv"
-# for args.dataset in ["bat", "eat", "cora", "citeseer"]:
-ego_ids = ["348", "414", "686", "698", "1684", "3980"]
+ego_ids = ["107","348", "414", "686", "698", "1684", "3980"]
 datasets = [f"facebook_{ego_id}" for ego_id in ego_ids]
 
 for args.dataset in datasets:
-    # "amap",
     file = open(file_name, "a+")
     print(args.dataset, file=file)
     file.close()
 
-    if args.dataset == 'cora':
-        args.cluster_num = 7
-        args.gnnlayers = 2
-        args.lr = 1e-3
-        args.n_input = 500
-        args.dims = [1500]
-        args.epsilon = 0.5
-        args.replay_buffer_size = 40
-
-    elif args.dataset.startswith('facebook'):
+    if args.dataset.startswith('facebook'):
         args.cluster_num = 12 # avg, will be adjusted dynamically anyway
         args.gnnlayers = 2
         args.lr = 1e-3
-        args.n_input = 0.85
+        args.n_input = -1
         args.dims = [512]
         args.epsilon = 0.7
-        args.replay_buffer_size = 50
-
-    elif args.dataset == 'citeseer':
-        args.cluster_num = 6
-        args.gnnlayers = 2
-        args.lr = 1e-3
-        args.n_input = 500
-        args.dims = [1500]
-        args.epsilon = 0.7
-        args.replay_buffer_size = 50
-
-    elif args.dataset == 'amap':
-        args.cluster_num = 8
-        args.gnnlayers = 3
-        args.lr = 1e-5
-        args.n_input = -1
-        args.dims = [500]
-        args.epsilon = 0.7
-        args.replay_buffer_size = 50
-
-    elif args.dataset == 'bat':
-        args.cluster_num = 4
-        args.gnnlayers = 6
-        args.lr = 1e-3
-        args.n_input = -1
-        args.dims = [1500]
-        args.epsilon = 0.3
-        args.replay_buffer_size = 30
-
-    elif args.dataset == 'eat':
-        args.cluster_num = 4
-        args.gnnlayers = 6
-        args.lr = 1e-4
-        args.n_input = -1
-        args.dims = [1500]
-        args.epsilon = 0.7
-        args.replay_buffer_size = 40
+        args.replay_buffer_size = 100
+        args.gamma = 1.5
 
     nmi_list = []
     f1_list = []
@@ -112,11 +68,11 @@ for args.dataset in datasets:
         
         '''
         dont do pca for now
+        
+        '''
         if args.n_input != -1:
             pca = PCA(n_components=args.n_input)
             features = pca.fit_transform(features)
-        '''
-        
 
         A = torch.tensor(adj.todense()).float().to(device)
 
@@ -126,7 +82,7 @@ for args.dataset in datasets:
         adj_norm_s = preprocess_graph(adj, args.gnnlayers, norm='sym', renorm=True)
         sm_fea_s = sp.csr_matrix(features).toarray()
 
-        path = "dataset/facebook/{}_feat_sm_{}.npy".format(args.dataset, args.dataset, args.gnnlayers)
+        path = "dataset/facebook/{}_feat_sm_{}.npy".format(args.dataset, args.n_input)
         if os.path.exists(path):
             sm_fea_s = np.load(path, allow_pickle=True)
         else:
@@ -139,7 +95,7 @@ for args.dataset in datasets:
         adj_1st = (adj + sp.eye(adj.shape[0])).toarray()
 
 
-        args.cluster_num = np.random.randint(8, 19) + 2 #cluster range: 10-20
+        args.cluster_num = np.random.randint(0, 19) + 2 #cluster range: 2-20
 
         # init clustering
         # _, _, predict_labels, _, _ = clustering(sm_fea_s.detach(), true_labels, args.cluster_num, device=device)
@@ -199,17 +155,6 @@ for args.dataset in datasets:
             """
             The change happens here
             """
-            # cluster_state = scatter(state, torch.tensor(predict_labels).to(device), dim=0, reduce="mean") #get the cluster centroids by averaging the node states in each cluster (based on nodes labels "predict_labels "), shape = [k, 512] for facebook
-            '''
-            pred_labels = torch.tensor(predict_labels_hard).long().to(device)
-
-            one_hot = F.one_hot(pred_labels, num_classes=args.cluster_num).float()
-
-            numerator = torch.mm(one_hot.T, state)
-            denominator = one_hot.sum(dim=0, keepdim=True).T
-
-            cluster_state = numerator / (denominator + 1e-8)
-            '''
             
             # m=2 is standard for FCM and matches your clustering function
             weights = u.pow(2).T
@@ -224,22 +169,16 @@ for args.dataset in datasets:
 
             # do action by random choose
             if random.random() > tmp_epsilon:
-                action = np.random.randint(8, 19) # need fix later
+                action = np.random.randint(0, 19) # need fix later
                 rand = True
             # do action by Q-net
             else:
-                # Get argmax from range 8 to 18 (inclusive) for cluster_num adjustment
-                action = int(Q_net(state, cluster_state)[8:19].argmax()) + 8
+                # Get argmax from range 0 to 18 (inclusive) for cluster_num adjustment
+                action = int(Q_net(state, cluster_state)[0:19].argmax())
 
             args.cluster_num = action + 2
             nmi, f1, acc, u, predict_labels_matrix, centers, dis = clustering(state.detach(), true_labels, args.cluster_num, device=device)
             dis = (state.unsqueeze(1) - centers.unsqueeze(0)).pow(2).sum(-1) + 1e-8 # why did they calculate dis again? Why not use the dis calculated in clustering function? Maybe they want to make sure the dis is calculated based on the current state and centers, not the one from clustering function which might be based on a different state/centers due to the way clustering is implemented.
-
-            # q = dis / (dis.sum(-1).reshape(-1, 1))
-            # p = q.pow(2) / q.sum(0).reshape(1, -1)
-            # p = p / p.sum(-1).reshape(-1, 1)
-            # pq_loss = F.kl_div(q.log(), p)
-            # loss += 10 * pq_loss
 
             m = 2.0
             power = 2.0 / (m - 1)
@@ -247,17 +186,9 @@ for args.dataset in datasets:
             ratio = (dis.unsqueeze(2) / dis.unsqueeze(1)).pow(power)
             u = 1.0 / ratio.sum(dim=2)
 
-            fcm_loss = (u.pow(m) * dis).sum(dim=1).mean() # later try 10 times here because currently the fcm_loss is not added to the total_loss somehow
+            fcm_loss = (u.pow(m) * dis).sum(dim=1).mean()
 
-            loss = infoNEC + 10 * fcm_loss 
-
-            if reward.item() > best_reward and rand == False:
-                best_reward = reward.item()
-                best_nmi = nmi
-                best_f1 = f1
-                best_acc = acc
-                best_cluster = args.cluster_num
-                best_epoch = epoch + 1
+            loss = infoNEC + 1000 * fcm_loss 
 
             loss.backward()
             optimizer.step()
@@ -266,17 +197,6 @@ for args.dataset in datasets:
             model.eval()
             z1, z2 = model(inx)
             next_state = (z1 + z2) / 2
-
-            # next_cluster_state = scatter(next_state, torch.tensor(predict_labels).to(device), dim=0, reduce="mean")
-            '''
-            labels = torch.tensor(predict_labels_hard).long().to(device)
-            one_hot = F.one_hot(labels, num_classes=args.cluster_num).float()
-
-            numerator = torch.mm(one_hot.T, next_state)
-            denominator = one_hot.sum(dim=0, keepdim=True).T
-
-            next_cluster_state = numerator / (denominator + 1e-8)
-            '''
 
             # m=2 is standard for FCM and matches your clustering function
             weights = u.pow(2).T
@@ -312,10 +232,13 @@ for args.dataset in datasets:
             expected_edges = torch.mm(u_k, u_k.t()) / m2 
 
             # 4. Calculate Final Fuzzy Modularity (Q_F)
-            # We take the trace (sum of the diagonal) to only reward edges 
-            # that fall completely WITHIN the same cluster c.
-            modularity_matrix = actual_edges - expected_edges
+            # Introduce args.gamma here. 
+            # gamma = 1.0 is standard modularity.
+            # gamma > 1.0 penalizes large communities (increases K).
+            modularity_matrix = actual_edges - (args.gamma * expected_edges)
             fuzzy_modularity = torch.trace(modularity_matrix) / m2
+            
+            reward = 10 * fuzzy_modularity.detach()
             
             # The RL agent maximizes the reward. Modularity is higher when 
             # the community structure is strong.
@@ -325,6 +248,14 @@ for args.dataset in datasets:
                                   [next_state.detach(), next_cluster_state.detach()], reward])
 
             tmp_epsilon += epsilon_step
+
+            if reward.item() > best_reward and rand == False:
+                best_reward = reward.item()
+                best_nmi = nmi
+                best_f1 = f1
+                best_acc = acc
+                best_cluster = args.cluster_num
+                best_epoch = epoch + 1
 
             # Placeholder for Q loss
             current_loss_Q = 0.0
