@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 class my_model(nn.Module):
-    def __init__(self, dims, act="ident"): # dims.shape = [d, 512]
+    def __init__(self, dims, act="relu"): # dims.shape = [d, 512]
         super(my_model, self).__init__()
         self.lin1 = nn.Linear(dims[0], dims[1])
         self.lin2 = nn.Linear(dims[0], dims[1])
@@ -15,7 +15,8 @@ class my_model(nn.Module):
             self.activate = lambda x: x
         if act == "sigmoid":
             self.activate = nn.Sigmoid()
-
+        if act == "relu":
+            self.activate = nn.ReLU()
     def reset_parameters(self):
         self.lin1.reset_parameters()
         self.lin2.reset_parameters()
@@ -33,15 +34,15 @@ class my_model(nn.Module):
 class my_Q_net(nn.Module):
     def __init__(self, dims):
         super(my_Q_net, self).__init__()
-        self.lin1 = nn.Linear(dims[0], dims[1])
+        self.lin_z = nn.Linear(dims[0], dims[1])
         self.lin_cluster = nn.Linear(dims[0], dims[1])
-        self.lin2 = nn.Linear(dims[1], dims[2])
+        self.lin_out = nn.Linear(dims[1], dims[2])
         self.reset_parameters()
         self.act = torch.nn.ReLU()
 
     def reset_parameters(self):
-        self.lin1.reset_parameters()
-        self.lin2.reset_parameters()
+        self.lin_z.reset_parameters()
+        self.lin_out.reset_parameters()
 
     def forward(self, x, cluster):
         # 1. Global Pooling: Aggregate node embeddings [N, D] -> [1, D]
@@ -50,15 +51,14 @@ class my_Q_net(nn.Module):
         cluster_pooled = cluster.mean(dim=0, keepdim=True)
 
         # 2. Process features
-        x_emb = self.act(F.normalize(self.lin1(x_pooled), dim=1, p=2)) # [1, 256]
+        x_emb = self.act(F.normalize(self.lin_z(x_pooled), dim=1, p=2)) # [1, 256]
         cluster_emb = self.act(F.normalize(self.lin_cluster(cluster_pooled), dim=1, p=2)) # [1, 256]
         
         # 3. Combine representations (summing to keep dimension [1, 256])
         combined = x_emb + cluster_emb
         
         # 4. Output Q-values for actions
-        # We REMOVE softmax because Q-values are regression targets, not probabilities.
-        out = self.lin2(combined)
+        out = self.lin_out(combined)
         
-        # Return a 1D vector of Q-values (shape: [19])
+        # Return a 1D vector of Q-values 
         return out.squeeze()
