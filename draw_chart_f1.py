@@ -6,8 +6,8 @@ def create_delta_bar_chart():
     datasets = ['facebook_107', 'facebook_348', 'facebook_414', 'facebook_686', 'facebook_698']
     
     # K-Means F1 Scores (%)
-    oracle_scores = [23.52, 37.23, 50.93, 10.99, 61.29]
-    empirical_scores = [23.08, 41.52, 47.36, 11.48, 58.71]
+    oracle_scores = [29.34, 42.98, 56.82, 11.40, 64.41]
+    empirical_scores = [30.33, 43.25, 54.66, 12.57, 58.00]
     
     # 2. Plot Configuration
     x = np.arange(len(datasets))  # Label locations
@@ -26,7 +26,7 @@ def create_delta_bar_chart():
     
     # 4. Add Labels, Title, and Custom Axes
     ax.set_ylabel('F1 Score (%)', fontsize=12, fontweight='bold')
-    ax.set_title('FCM Performance Variance: Ground-Truth vs. Empirical K Estimation', fontsize=14, fontweight='bold', pad=20)
+    ax.set_title('K-Means Performance Variance: Ground-Truth vs. Empirical K Estimation', fontsize=14, fontweight='bold', pad=20)
     ax.set_xticks(x)
     ax.set_xticklabels(datasets, fontsize=11)
     
@@ -68,7 +68,7 @@ def create_delta_bar_chart():
 
     # 6. Final Layout Adjustments and Save
     plt.tight_layout()
-    plt.savefig('fcm_f1_variance_chart.png', bbox_inches='tight')
+    plt.savefig('kmeans_f1_variance_chart.png', bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":

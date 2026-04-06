@@ -12,8 +12,8 @@ HYPERPARAMS = {
     "facebook_107":  {"n_input": -1,  "threshold": 0.95, "gnnlayers": 2},
     "facebook_348":  {"n_input": 128, "threshold": 0.8,  "gnnlayers": 5},
     "facebook_414":  {"n_input": -1,  "threshold": 0.8,  "gnnlayers": 3},
-    "facebook_686":  {"n_input": -1,  "threshold": 0.6,  "gnnlayers": 4},
-    "facebook_698":  {"n_input": -1,  "threshold": 0.8,  "gnnlayers": 2},
+    "facebook_686":  {"n_input": -1,  "threshold": 0.7,  "gnnlayers": 1},
+    "facebook_698":  {"n_input": -1,  "threshold": 0.9,  "gnnlayers": 2},
 }
 
 # NEW: The K values discovered via the Elbow Method on smoothed features
@@ -21,7 +21,7 @@ ELBOW_PREDICTED_K = {
     "facebook_107": 8,
     "facebook_348": 7,
     "facebook_414": 10,
-    "facebook_686": 9,
+    "facebook_686": 10,
     "facebook_698": 10
 }
 

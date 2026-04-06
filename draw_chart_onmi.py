@@ -6,8 +6,8 @@ def create_onmi_delta_bar_chart():
     datasets = ['facebook_107', 'facebook_348', 'facebook_414', 'facebook_686', 'facebook_698']
     
     # K-Means ONMI Scores (%)
-    oracle_scores = [4.03, 17.90, 31.65, 1.76, 32.88]
-    empirical_scores = [2.81, 20.84, 22.65, 1.83, 33.89]
+    oracle_scores = [7.18, 20.63, 43.09, 9.68, 42.05]
+    empirical_scores = [7.53, 21.15, 37.62, 10.48, 40.65]
     
     # 2. Plot Configuration
     x = np.arange(len(datasets))  # Label locations
@@ -26,7 +26,7 @@ def create_onmi_delta_bar_chart():
     
     # 4. Add Labels, Title, and Custom Axes (Small Font Configuration)
     ax.set_ylabel('ONMI Score (%)', fontsize=10, fontweight='bold')
-    ax.set_title('FCM Performance Variance: Ground-Truth vs. Empirical K Estimation', fontsize=12, fontweight='bold', pad=15)
+    ax.set_title('K-Means Performance Variance: Ground-Truth vs. Empirical K Estimation', fontsize=12, fontweight='bold', pad=15)
     ax.set_xticks(x)
     ax.set_xticklabels(datasets, fontsize=9)
     ax.tick_params(axis='y', labelsize=9)
@@ -66,7 +66,7 @@ def create_onmi_delta_bar_chart():
 
     # 6. Final Layout Adjustments and Save
     plt.tight_layout()
-    plt.savefig('fcm_onmi_variance_chart.png', bbox_inches='tight')
+    plt.savefig('kmeans_onmi_variance_chart.png', bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":

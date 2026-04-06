@@ -13,7 +13,7 @@ HYPERPARAMS = {
     "facebook_107":  {"n_input": -1,  "gnnlayers": 2},
     "facebook_348":  {"n_input": 128, "gnnlayers": 5},
     "facebook_414":  {"n_input": -1,  "gnnlayers": 3},
-    "facebook_686":  {"n_input": -1,  "gnnlayers": 4},
+    "facebook_686":  {"n_input": -1,  "gnnlayers": 1},
     "facebook_698":  {"n_input": -1,  "gnnlayers": 2},
 }
 

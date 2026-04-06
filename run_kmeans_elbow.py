@@ -13,14 +13,14 @@ HYPERPARAMS = {
     "facebook_107":  {"n_input": -1,  "gnnlayers": 2},
     "facebook_348":  {"n_input": 128, "gnnlayers": 5},
     "facebook_414":  {"n_input": -1,  "gnnlayers": 3},
-    "facebook_686":  {"n_input": -1,  "gnnlayers": 4},
+    "facebook_686":  {"n_input": -1,  "gnnlayers": 1},
     "facebook_698":  {"n_input": -1,  "gnnlayers": 2},
 }
 ELBOW_PREDICTED_K = {
     "facebook_107": 8,
     "facebook_348": 7,
     "facebook_414": 10,
-    "facebook_686": 9,
+    "facebook_686": 10,
     "facebook_698": 10
 }
 def run_kmeans_on_facebook_datasets():

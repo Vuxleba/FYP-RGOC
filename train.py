@@ -46,7 +46,6 @@ for args.dataset in datasets:
 
     if args.dataset.startswith('facebook'):
         # Global defaults for all facebook datasets
-        args.gnnlayers = 2
         args.lr = 1e-3
         args.epsilon = 0.7
         args.replay_buffer_size = 100
@@ -60,20 +59,22 @@ for args.dataset in datasets:
             args.dims = [1500] 
             args.threshold = 0.95 
             args.gamma = 2.0
+            args.gnnlayers = 2
 
         elif ego_id == '348':
             args.min_cluster = 10 
             args.n_input = 128    
             args.dims = [1280]
-            args.gnnlayers = 5   
             args.threshold = 0.8  
+            args.gnnlayers = 5   
+            args.gamma = 1
 
         elif ego_id == '414':
             args.min_cluster = 3 
             args.n_input = -1     
             args.dims = [1500]
-            args.gamma = 1.2
             args.threshold = 0.8
+            args.gamma = 1.2
             args.gnnlayers = 3
             
         elif ego_id == '686':
@@ -88,8 +89,8 @@ for args.dataset in datasets:
             args.min_cluster = 9 
             args.n_input = -1     
             args.dims = [256]
-            args.gamma = 1.8
             args.threshold = 0.9
+            args.gamma = 1.8
             args.gnnlayers = 2
 
             
@@ -138,11 +139,10 @@ for args.dataset in datasets:
         best_cluster = 0
 
         # MLP
-        model = my_model([sm_fea_s.shape[1]] + args.dims)
-        # if ego_id == '107' or ego_id == '686':
-        #     model = my_model([sm_fea_s.shape[1]] + args.dims)
-        # else:
-        #     model = my_model([sm_fea_s.shape[1]] + args.dims, act="ident")
+        if ego_id == '348' or ego_id == '414':
+            model = my_model([sm_fea_s.shape[1]] + args.dims, act="ident")
+        else:
+            model = my_model([sm_fea_s.shape[1]] + args.dims)
         Q_net = my_Q_net(args.dims + [256, args.max_action]).to(device)
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
         optimizer_Q = optim.Adam(Q_net.parameters(), lr=args.Q_lr)
