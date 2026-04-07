@@ -4,12 +4,11 @@
 # Whitelist the required Python files
 !train.py
 !utils.py
-!run_louvain.py
-!run_fcm.py
-!run_kmeans.py
-!run_fcm_elbow.py
-!run_kmeans_elbow.py
 !model.py
+
+# Whitelist the run_traditionals folder and python scripts inside it
+!run_traditionals/
+!run_traditionals/*.py
 
 # Whitelist standard course files
 !README.md
