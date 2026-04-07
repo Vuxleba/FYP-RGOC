@@ -6,7 +6,6 @@ from utils import *
 from tqdm import tqdm
 from torch import optim
 import torch.nn.functional as F
-from torch_scatter import scatter
 from model import my_model, my_Q_net
 from sklearn.decomposition import PCA
 
