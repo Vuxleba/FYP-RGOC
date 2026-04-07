@@ -1,14 +1,22 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 
 class my_model(nn.Module):
+    """
+    Core graph neural network framework containing twin linear pathways.
+    Used to process graph inputs into encoded embeddings.
+    """
     def __init__(self, dims, act="relu"): # dims.shape = [d, 512]
+        """
+        Initialize the twin pathway model.
+        Args:
+            dims: List mapping input -> output dimension sizes.
+            act: The activation function type ('ident', 'sigmoid', 'relu').
+        """
         super(my_model, self).__init__()
         self.lin1 = nn.Linear(dims[0], dims[1])
         self.lin2 = nn.Linear(dims[0], dims[1])
-        self.bn = nn.BatchNorm1d(dims[1])
         self.reset_parameters()
 
         if act == "ident":
@@ -18,10 +26,15 @@ class my_model(nn.Module):
         if act == "relu":
             self.activate = nn.ReLU()
     def reset_parameters(self):
+        """Reset the parameters of linear layers."""
         self.lin1.reset_parameters()
         self.lin2.reset_parameters()
 
     def forward(self, x):
+        """
+        Forward logic processing nodes through both linear pathways.
+        Outputs normalized embeddings.
+        """
         out1 = self.activate(self.lin1(x))
         out2 = self.activate(self.lin2(x))
 
@@ -32,7 +45,16 @@ class my_model(nn.Module):
 
 
 class my_Q_net(nn.Module):
+    """
+    Q-Network for Reinforcement Learning to evaluate clustering assignments.
+    Takes cluster pools and raw nodes, combining to output Q-values.
+    """
     def __init__(self, dims):
+        """
+        Setup linear layer representations.
+        Args:
+            dims: Dimension scale containing [input_dim, hidden_dim, out_dim].
+        """
         super(my_Q_net, self).__init__()
         self.lin_z = nn.Linear(dims[0], dims[1])
         self.lin_cluster = nn.Linear(dims[0], dims[1])
@@ -41,10 +63,15 @@ class my_Q_net(nn.Module):
         self.act = torch.nn.ReLU()
 
     def reset_parameters(self):
+        """Reset the parameters of inner linear paths."""
         self.lin_z.reset_parameters()
         self.lin_out.reset_parameters()
 
     def forward(self, x, cluster):
+        """
+        Forward process taking aggregated node data and clusters
+        to generate a combined action Q-value.
+        """
         # 1. Global Pooling: Aggregate node embeddings [N, D] -> [1, D]
         x_pooled = x.mean(dim=0, keepdim=True)
         # Aggregate cluster centroids [K, D] -> [1, D]

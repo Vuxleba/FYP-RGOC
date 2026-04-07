@@ -1,0 +1,24 @@
+# Ignore everything in the directory
+*
+
+# Whitelist the required Python files
+!train.py
+!utils.py
+!run_louvain.py
+!run_fcm.py
+!run_kmeans.py
+!run_fcm_elbow.py
+!run_kmeans_elbow.py
+!model.py
+
+# Whitelist standard course files
+!README.md
+!requirements.txt
+!environment.yml
+!result.csv
+!.gitignore
+
+# Whitelist facebook.zip in dataset folder
+!dataset/
+dataset/*
+!dataset/facebook.zip

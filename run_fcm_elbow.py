@@ -1,4 +1,7 @@
-import os
+"""
+Execution script to evaluate standard Fuzzy C-Means (FCM) clustering
+using optimal K values dynamically discovered via the Elbow method.
+"""
 import torch
 import numpy as np
 import scipy.sparse as sp

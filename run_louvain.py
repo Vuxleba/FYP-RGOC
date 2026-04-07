@@ -1,3 +1,7 @@
+"""
+Execution script to evaluate Louvain community detection on Facebook datasets.
+Provides baseline overlapping NMI and F1 comparisons without deep learning.
+"""
 import numpy as np
 import networkx as nx
 import networkx.algorithms.community as nx_comm

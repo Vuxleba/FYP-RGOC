@@ -1,4 +1,7 @@
-import os
+"""
+Execution script to evaluate standard Fuzzy C-Means (FCM) clustering
+accuracy on the pre-processed Facebook graphs.
+"""
 import torch
 import numpy as np
 import scipy.sparse as sp

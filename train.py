@@ -1,11 +1,19 @@
+"""
+Main execution script for training the Reinforcement Graph Overlapping Clustering (RGOC) model.
+The core concept of this framework is built on the “Reinforcement Graph Clustering with Unknown Cluster Number” (RGC) architecture proposed by Liu et al. (2023)
+"""
 import os
 import argparse
 import warnings
 import random
-from utils import *
+import torch
+import numpy as np
+import scipy.sparse as sp
 from tqdm import tqdm
 from torch import optim
 import torch.nn.functional as F
+
+from utils import setup_seed, load_graph_data, preprocess_graph, clustering
 from model import my_model, my_Q_net
 from sklearn.decomposition import PCA
 

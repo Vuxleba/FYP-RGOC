@@ -1,34 +1,17 @@
 import os
-from collections import defaultdict
 import torch
 import random
-import math
 import numpy as np
 import scipy.sparse as sp
-from sklearn import metrics
-from munkres import Munkres
-from kmeans_gpu import kmeans                              
 import skfuzzy as fuzz
 from cdlib import NodeClustering, evaluation
 
 
-def parse_index_file(filename):
-    index = []
-    for line in open(filename):
-        index.append(int(line.strip()))
-    return index
-
-
-def sparse_to_tuple(sparse_mx):
-    if not sp.isspmatrix_coo(sparse_mx):
-        sparse_mx = sparse_mx.tocoo()
-    coords = np.vstack((sparse_mx.row, sparse_mx.col)).transpose()
-    values = sparse_mx.data
-    shape = sparse_mx.shape
-    return coords, values, shape
-
-
 def preprocess_graph(adj, layer, norm='sym', renorm=True):
+    """
+    Standardize/Normalize adjcency matrix inputs iteratively.
+    Adds a self-loop (renorm option) and applies matrix normalization.
+    """
     adj = sp.coo_matrix(adj)
     ident = sp.eye(adj.shape[0])
     if renorm:
@@ -56,15 +39,6 @@ def preprocess_graph(adj, layer, norm='sym', renorm=True):
     return adjs
 
 
-def sparse_mx_to_torch_sparse_tensor(sparse_mx):
-    """Convert a scipy sparse matrix to a torch sparse tensor."""
-    sparse_mx = sparse_mx.tocoo().astype(np.float32)
-    indices = torch.from_numpy(
-        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
-    values = torch.from_numpy(sparse_mx.data)
-    shape = torch.Size(sparse_mx.shape)
-    return torch.sparse.FloatTensor(indices, values, shape)
-
 def eva(C_star, C_hat, num_nodes=None):
     """
     Calculates ONMI and Average F1 Score for overlapping communities 
@@ -74,23 +48,12 @@ def eva(C_star, C_hat, num_nodes=None):
     if not C_star or not C_hat:
         return 0.0, 0.0
 
-    # Convert standard Python iterables (list of sets/lists) to cdlib's NodeClustering objects.
-    # We can pass graph=None since external evaluation metrics like ONMI and F1 
-    # only need the community structures themselves, not the graph topology.
     nc_star = NodeClustering(list(C_star), graph=None, method_name="ground_truth")
     nc_hat = NodeClustering(list(C_hat), graph=None, method_name="prediction")
 
-    # ==========================================
-    # 1. ONMI Calculation
-    # ==========================================
-    # cdlib provides two variants for overlapping NMI: MGH and LFK. 
-    # MGH (McDaid-Greene-Hurley) is generally the standard. 
     onmi_result = evaluation.overlapping_normalized_mutual_information_MGH(nc_star, nc_hat)
     onmi = onmi_result.score
 
-    # ==========================================
-    # 2. Average F1 Score Calculation
-    # ==========================================
     f1_result = evaluation.f1(nc_star, nc_hat)
     avg_f1 = f1_result.score
 
@@ -300,7 +263,6 @@ def clustering(feature, true_labels, cluster_num, device, threshold=0.5):
     # Ensure 'feature' is on the same device as 'centers'
     dis = torch.cdist(feature.to(device), centers).pow(2)
     
-    # Note: Accuracy has been removed from the returns to match the new eva() outputs
     return 100 * nmi, 100 * f1, predict_labels_soft, predict_labels_matrix, centers, dis
     
 def diffusion_adj(adj, mode="ppr", transport_rate=0.2):
@@ -329,33 +291,3 @@ def diffusion_adj(adj, mode="ppr", transport_rate=0.2):
         diff_adj = transport_rate * np.linalg.inv((np.eye(d.shape[0]) - (1 - transport_rate) * norm_adj))
 
     return diff_adj
-
-
-def normalize_adj(adj, self_loop=True, symmetry=False):
-    """
-    normalize the adj matrix
-    :param adj: input adj matrix
-    :param self_loop: if add the self loop or not
-    :param symmetry: symmetry normalize or not
-    :return: the normalized adj matrix
-    """
-    # add the self_loop
-    if self_loop:
-        adj_tmp = adj + np.eye(adj.shape[0])
-    else:
-        adj_tmp = adj
-
-    # calculate degree matrix and it's inverse matrix
-    d = np.diag(adj_tmp.sum(0))
-    d_inv = np.linalg.inv(d)
-
-    # symmetry normalize: D^{-0.5} A D^{-0.5}
-    if symmetry:
-        sqrt_d_inv = np.sqrt(d_inv)
-        norm_adj = np.matmul(np.matmul(sqrt_d_inv, adj_tmp), adj_tmp)
-
-    # non-symmetry normalize: D^{-1} A
-    else:
-        norm_adj = np.matmul(d_inv, adj_tmp)
-
-    return norm_adj

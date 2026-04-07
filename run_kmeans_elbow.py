@@ -1,5 +1,7 @@
-import os
-import torch
+"""
+Execution script to evaluate K-Means clustering
+using optimal K values dynamically discovered via the Elbow method.
+"""
 import numpy as np
 import scipy.sparse as sp
 import warnings

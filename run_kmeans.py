@@ -1,5 +1,7 @@
-import os
-import torch
+"""
+Execution script to evaluate standard K-Means clustering.
+Serves as an additional performance baseline.
+"""
 import numpy as np
 import scipy.sparse as sp
 import warnings
